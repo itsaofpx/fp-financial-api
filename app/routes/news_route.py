@@ -9,7 +9,6 @@ import os
 logger = logging.getLogger(__name__)
 news_bp = Blueprint("news", __name__)
 news_service = NewsService()
-
 @news_bp.route("/", methods=["GET"])
 def get_all_news():
     page = request.args.get("page", 1, type=int)
