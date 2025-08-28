@@ -12,7 +12,8 @@ import math
 logger = logging.getLogger(__name__)
 news_bp = Blueprint("news", __name__)
 news_service = NewsService()
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyCQtwJMf6N7ZWPpzQ-hhN1krk2EnZmJDz4")
+# GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyCQtwJMf6N7ZWPpzQ-hhN1krk2EnZmJDz4")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyDQMvla98RH0xfwAguSbOgHLyQJVhvjBrQ")
 genai.configure(api_key=GOOGLE_API_KEY)
 
 
@@ -39,6 +40,7 @@ def initialize_gemini_model():
             available_models = []
 
         model_candidates = [
+            "gemini-2.0-flash",
             "gemini-pro",
             "gemini-1.5-flash-latest",
             "gemini-1.5-flash",
