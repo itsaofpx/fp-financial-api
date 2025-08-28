@@ -1,6 +1,7 @@
 import os
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
+from flask_cors import CORS
 import logging
 from datetime import datetime, timezone
 
@@ -16,7 +17,7 @@ db = SQLAlchemy()
 
 def create_app():
     app = Flask(__name__)
-
+    CORS(app)
     DB_USER = os.getenv("DB_USERNAME", "fp-finance")
     DB_PASS = os.getenv("DB_PASSWORD", "0000")
     DB_HOST = os.getenv("DB_HOST", "host.docker.internal")
