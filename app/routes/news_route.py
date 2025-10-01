@@ -3,6 +3,7 @@ import requests
 from datetime import datetime
 from flask import Blueprint, jsonify, request
 from app.services.news_service import NewsService
+from app.services.gemini_prompt_service import GeminiPromptService
 import google.generativeai as genai
 import logging
 import re
@@ -12,6 +13,8 @@ import math
 logger = logging.getLogger(__name__)
 news_bp = Blueprint("news", __name__)
 news_service = NewsService()
+gemini_prompt_service = GeminiPromptService()
+
 # GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyCQtwJMf6N7ZWPpzQ-hhN1krk2EnZmJDz4")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyDQMvla98RH0xfwAguSbOgHLyQJVhvjBrQ")
 genai.configure(api_key=GOOGLE_API_KEY)
@@ -198,9 +201,34 @@ def fetch_external_news():
             if len(saved_articles) >= 50:
                 break
 
+        # หลังจากบันทึกข่าวเสร็จแล้ว ให้สร้าง AI summary และเก็บลง database
+        if saved_articles:
+            try:
+                # ดึงข่าวล่าสุด 30 ข่าว
+                latest_news = news_service.get_latest_news(limit=30)
+                
+                if latest_news:
+                    # สร้าง AI summary
+                    summary = generate_ai_news_summary(latest_news)
+                    
+                    # บันทึก prompt ลง database
+                    prompt_data = {
+                        'title': summary.get('title'),
+                        'content': summary.get('content'),
+                        'link': summary.get('link'),
+                        'articles_count': len(latest_news)
+                    }
+                    
+                    saved_prompt = gemini_prompt_service.create_daily_prompt(prompt_data)
+                    if saved_prompt:
+                        logger.info("Successfully created daily Gemini prompt")
+                    
+            except Exception as prompt_error:
+                logger.error(f"Failed to create Gemini prompt: {str(prompt_error)}")
+
         return jsonify(
             {
-                "message": f"Successfully saved {len(saved_articles)} new articles",
+                "message": f"Successfully saved {len(saved_articles)} new articles and generated AI summary",
                 "articles": saved_articles,
             }
         ), 201
@@ -208,6 +236,33 @@ def fetch_external_news():
     except Exception as e:
         logger.error(f"Failed to fetch and save news: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+    
+    
+@news_bp.route("/prompt/latest", methods=["GET"])
+def get_latest_prompt():
+    try:
+        prompt = gemini_prompt_service.get_latest_prompt()
+        
+        if not prompt:
+            return jsonify(
+                {
+                    "title": "ไม่มีบทวิเคราะห์",
+                    "content": "ยังไม่มีบทวิเคราะห์ในระบบ กรุณาลองใหม่ภายหลัง",
+                    "link": None,
+                }
+            ), 404
+            
+        return jsonify(prompt), 200
+        
+    except Exception as e:
+        logger.error(f"Failed to get latest prompt: {str(e)}", exc_info=True)
+        return jsonify(
+            {
+                "title": "เกิดข้อผิดพลาด",
+                "content": "ไม่สามารถดึงบทวิเคราะห์ได้ กรุณาลองใหม่ภายหลัง",
+                "link": None,
+            }
+        ), 500
 
 
 @news_bp.route("/ai", methods=["POST"])
