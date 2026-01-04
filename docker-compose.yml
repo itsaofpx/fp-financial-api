@@ -5,12 +5,12 @@ services:
     build: .
     ports:
       - "3002:3002"
+    env_file:
+      - .env
     environment:
-      - DB_USERNAME=fp-finance
-      - DB_PASSWORD=0000
-      - DB_HOST=host.docker.internal
-      - DB_PORT=5433
-      - DB_NAME=fp-admin
-      - NEWS_API_KEY=2c2fc7c86f0a423da4c2dd31d78cedcf
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - NEWS_API_KEY=${NEWS_API_KEY}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
     volumes:
       - .:/app
