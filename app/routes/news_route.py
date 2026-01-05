@@ -15,60 +15,34 @@ news_bp = Blueprint("news", __name__)
 news_service = NewsService()
 gemini_prompt_service = GeminiPromptService()
 
-# GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyCQtwJMf6N7ZWPpzQ-hhN1krk2EnZmJDz4")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyBDJCcDsxXUe4-DEisFdlBdECN7rjV6Sas")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=GOOGLE_API_KEY)
 
 
 def initialize_gemini_model():
     """
-    Robust Gemini model initialization with extensive error handling
+    เจาะจงใช้ Gemini 2.5 Flash Lite เพื่อความเร็วและประหยัด Quota
     """
     try:
         genai.configure(api_key=GOOGLE_API_KEY)
-
-        try:
-            models = genai.list_models()
-            available_models = [
-                m.name
-                for m in models
-                if "generateContent" in m.supported_generation_methods
-            ]
-
-            logger.info(f"Total available models: {len(available_models)}")
-            logger.info(f"Available models: {available_models}")
-
-        except Exception as list_error:
-            logger.error(f"Failed to list models: {list_error}")
-            available_models = []
-
-        model_candidates = [
-            "gemini-2.0-flash",
-            "gemini-pro",
-            "gemini-1.5-flash-latest",
-            "gemini-1.5-flash",
-            "gemini-flash",
-            "gemini-1.5-pro-latest",
-        ]
-
-        for candidate in model_candidates:
-            try:
-                model = genai.GenerativeModel(candidate)
-                test_response = model.generate_content(
-                    "Hello, can you confirm you're working?"
-                )
-                logger.info(f"Successfully initialized and tested model: {candidate}")
-                return model
-            except Exception as model_error:
-                logger.warning(
-                    f"Model {candidate} initialization failed: {model_error}"
-                )
-
-        logger.error("No Gemini model could be successfully initialized")
-        return None
+        
+        model_name = "gemini-2.5-flash-lite" 
+        
+        model = genai.GenerativeModel(
+            model_name=model_name,
+            generation_config={
+                "temperature": 0.3,
+                "max_output_tokens": 1024,
+            }
+        )
+        
+        
+        model.generate_content("Ping") 
+        logger.info(f"Successfully initialized: {model_name}")
+        return model
 
     except Exception as e:
-        logger.error(f"Critical error in model initialization: {e}", exc_info=True)
+        logger.error(f"Gemini Init Error: {e}")
         return None
 
 
@@ -227,27 +201,24 @@ def fetch_external_news():
             if len(saved_articles) >= 50:
                 break
 
-        # หลังจากบันทึกข่าวเสร็จแล้ว ให้สร้าง AI summary และเก็บลง database
         if saved_articles:
             try:
-                # ดึงข่าวล่าสุด 30 ข่าว
-                latest_news = news_service.get_latest_news(limit=30)
-                
+                latest_news = news_service.get_latest_news(limit=49)
                 if latest_news:
-                    # สร้าง AI summary
                     summary = generate_ai_news_summary(latest_news)
                     
-                    # บันทึก prompt ลง database
-                    prompt_data = {
-                        'title': summary.get('title'),
-                        'content': summary.get('content'),
-                        'link': summary.get('link'),
-                        'articles_count': len(latest_news)
-                    }
-                    
-                    saved_prompt = gemini_prompt_service.create_daily_prompt(prompt_data)
-                    if saved_prompt:
-                        logger.info("Successfully created daily Gemini prompt")
+                    if summary.get('title') != "ไม่สามารถสร้างบทวิเคราะห์ได้":
+                        prompt_data = {
+                            'title': summary.get('title'),
+                            'content': summary.get('content'),
+                            'link': summary.get('link'),
+                            'articles_count': len(latest_news)
+                        }
+                        saved_prompt = gemini_prompt_service.create_daily_prompt(prompt_data)
+                        if saved_prompt:
+                            logger.info("Successfully created daily Gemini prompt")
+                    else:
+                        logger.warning("AI Summary generation failed, skipping database save.")
                     
             except Exception as prompt_error:
                 logger.error(f"Failed to create Gemini prompt: {str(prompt_error)}")
@@ -289,36 +260,41 @@ def get_latest_prompt():
                 "link": None,
             }
         ), 500
-
-
 @news_bp.route("/ai", methods=["POST"])
 def generate_daily_top_news():
     try:
-        latest_news = news_service.get_latest_news(limit=30)
+        latest_news = news_service.get_latest_news(limit=49)
 
         if not latest_news:
-            return jsonify(
-                {
-                    "title": "ไม่สามารถสร้างบทวิเคราะห์ได้",
-                    "content": "ระบบขัดข้อง กรุณาลองใหม่ในภายหลัง",
-                    "link": None,
-                }
-            ), 404
+            return jsonify({"error": "ไม่พบข้อมูลข่าวในระบบ"}), 404
 
         summary = generate_ai_news_summary(latest_news)
-
-        return jsonify(summary), 200
+        
+        if summary.get('title') != "ไม่สามารถสร้างบทวิเคราะห์ได้":
+            prompt_data = {
+                'title': summary.get('title'),
+                'content': summary.get('content'),
+                'link': summary.get('link'),
+                'articles_count': len(latest_news)
+            }
+            
+            saved_prompt = gemini_prompt_service.create_daily_prompt(prompt_data)
+            
+            if saved_prompt:
+                logger.info("Successfully saved AI summary from /ai endpoint")
+                return jsonify(saved_prompt), 200
+            
+            return jsonify({"error": "บันทึกข้อมูลลงฐานข้อมูลล้มเหลว"}), 500
+        
+        return jsonify({
+            "title": summary.get('title'),
+            "content": summary.get('content'),
+            "error": "AI Generation Failed"
+        }), 503
 
     except Exception as e:
-        logger.error(f"Failed to generate daily top news: {str(e)}", exc_info=True)
-        return jsonify(
-            {
-                "title": "ไม่สามารถสร้างบทวิเคราะห์ได้",
-                "content": "ระบบขัดข้อง กรุณาลองใหม่ในภายหลัง",
-                "link": None,
-            }
-        ), 500
-
+        logger.error(f"Critical error in /ai endpoint: {str(e)}", exc_info=True)
+        return jsonify({"error": "เกิดข้อผิดพลาดภายในระบบ"}), 500
 
 def generate_ai_news_summary(articles):
     try:
@@ -331,73 +307,72 @@ def generate_ai_news_summary(articles):
                 "link": None,
             }
 
+        # เตรียมวันที่ปัจจุบัน พ.ศ. 2569
+        now = datetime.now()
+        thai_months = ["", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
+        formatted_date = f"{now.day} {thai_months[now.month]} {now.year + 543}"
+
         articles_context = "\n\n".join(
             [
                 f"ข่าวที่ {idx+1}:\n"
-                f"- หัวข้อ: {article.get('title', 'ไม่มีหัวข้อ')}\n"
-                f"- แหล่งที่มา: {article.get('source', 'ไม่ทราบแหล่งที่มา')}\n"
-                f"- วันที่: {article.get('publishedAt', 'ไม่มีข้อมูลวันที่')}\n"
-                f"- คำอธิบายย่อ: {article.get('description', 'ไม่มีคำอธิบาย')}"
+                f"- หัวข้อ: {article.get('title')}\n"
+                f"- แหล่งข่าว: {article.get('source')}\n"
+                f"- เนื้อหาสำคัญ: {article.get('description')}"
                 for idx, article in enumerate(articles[:10])
             ]
         )
 
         prompt = f"""
-        บทวิเคราะห์ตลาดการเงินและการลงทุนประจำวัน
+        จงสวมบทบาทเป็น "หัวหน้านักกลยุทธ์การลงทุนอาวุโส" (Senior Investment Strategist)
+        หน้าที่ของคุณคือเขียนบทวิเคราะห์สถานการณ์ตลาดการเงินโลกประจำวันให้แก่กลุ่มนักลงทุนรุ่นใหม่
 
-        คำแนะนำในการเขียน:
-        - เขียนอย่างละเอียด เป็นมืออาชีพ
-        - ใช้ภาษาที่เข้าใจง่าย กระชับ และน่าสนใจ
-        - ครอบคลุมประเด็นสำคัญทางเศรษฐกิจและการเงิน
-        - ให้มุมมองเชิงลึกที่เป็นประโยชน์ต่อนักลงทุน
-        - อธิบายแนวโน้มและปัจจัยที่ส่งผลกระทบ
-
-        บริบทข่าวล่าสุด:
+        ข้อมูลวันที่ปัจจุบัน: {formatted_date}
+        บริบทข่าวสารล่าสุดที่รวบรวมมา:
         {articles_context}
 
-        โครงสร้างบทวิเคราะห์:
-        1. สรุปภาพรวมตลาดการเงินในวันนี้
-        2. วิเคราะห์แนวโน้มและปัจจัยสำคัญ
-        3. ผลกระทบต่อการลงทุนและเศรษฐกิจ
-        4. คำแนะนำเชิงปฏิบัติสำหรับนักลงทุน
-        5. มุมมองและคาดการณ์ในอนาคต
+        คำแนะนำในการเขียน (Strict Instructions):
+        1. **บรรทัดแรก** ต้องขึ้นต้นด้วย: "บทวิเคราะห์ตลาดการเงินและการลงทุนประจำวัน: {formatted_date}"
+        2. **ห้ามใช้ปี พ.ศ. อื่น** นอกจาก {now.year + 543} ในการเกริ่นนำ หากข่าวระบุปีเก่า ให้วิเคราะห์ว่าเป็นผลกระทบต่อเนื่องมาจนถึงปัจจุบัน
+        3. ใช้ภาษาไทยระดับทางการที่อ่านง่าย มีความน่าเชื่อถือ และวิเคราะห์ลึกถึง "สาเหตุและผลกระทบ" (Impact Analysis)
+        4. หลีกเลี่ยงการสรุปข่าวทีละข่าว แต่ให้ "ร้อยเรียง" ข่าวทั้งหมดเข้าด้วยกันเป็นภาพรวมเดียว
+
+        โครงสร้างบทวิเคราะห์ (ห้ามเปลี่ยนหัวข้อ):
+        ---
+        บทวิเคราะห์ตลาดการเงิน: แนวโน้มและโอกาสการลงทุนประจำวัน
+        บทวิเคราะห์ตลาดการเงินและการลงทุนประจำวัน: {formatted_date}
+
+        [1. สรุปภาพรวมสภาวะตลาดการเงิน]: (วิเคราะห์ความเคลื่อนไหวของตลาดโลกในรอบ 24 ชั่วโมงที่ผ่านมา)
+        
+        [2. ปัจจัยสำคัญที่ขับเคลื่อนตลาด]: (เจาะลึก 2-3 ประเด็นที่ส่งผลกระทบต่อจิตวิทยานักลงทุนในขณะนี้)
+        
+        [3. กลยุทธ์การบริหารพอร์ตการลงทุน]: (คำแนะนำในการปรับสัดส่วนสินทรัพย์หรือการรับมือความเสี่ยง)
+        
+        [4. มุมมองและคาดการณ์ระยะสั้น]: (การพยากรณ์ทิศทางตลาดในช่วงสัปดาห์นี้)
+        ---
 
         ข้อกำหนดพิเศษ:
-        - เขียนความยาวประมาณ 20-25 บรรทัด
-        - ใช้ข้อมูลเชิงลึกและวิเคราะห์อย่างเป็นระบบ
-        - นำเสนอมุมมองที่รอบด้านและน่าเชื่อถือ
-        - เน้นให้ความรู้และสร้างความเข้าใจ
-
-        โปรดเขียนบทวิเคราะห์เป็นภาษาไทยที่มีคุณภาพ 
-        ให้ข้อมูลที่เป็นประโยชน์และน่าสนใจ
+        - ความยาว 20-30 บรรทัด
+        - เน้นการเว้นวรรคและย่อหน้าที่อ่านง่ายบนมือถือ
+        - หากมีข่าวเกี่ยวกับ Warren Buffett หรือการเปลี่ยนผ่านผู้นำ ให้เน้นวิเคราะห์เรื่อง "ความเชื่อมั่นเชิงโครงสร้าง" (Structural Confidence)
         """
 
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-
-        response = model.generate_content(prompt, safety_settings=safety_settings)
+        response = model.generate_content(prompt)
 
         recommended_link = next(
             (article.get("url") for article in articles if article.get("url")),
             "https://www.set.or.th/th/market/market-highlight",
         )
 
-        summary = {
+        return {
             "title": "บทวิเคราะห์ตลาดการเงิน: แนวโน้มและโอกาสการลงทุนประจำวัน",
             "content": response.text.strip(),
             "link": recommended_link,
         }
 
-        return summary
-
     except Exception as e:
         logger.error(f"เกิดข้อผิดพลาดในการสร้างบทวิเคราะห์: {e}", exc_info=True)
         return {
             "title": "บทวิเคราะห์ตลาดการเงิน",
-            "content": "ระบบขัดข้อง ไม่สามารถสร้างบทวิเคราะห์ได้ในขณะนี้ กรุณาลองใหม่ในภายหลัง",
+            "content": "ขออภัย ระบบไม่สามารถประมวลผลบทวิเคราะห์ได้ในขณะนี้",
             "link": "https://www.set.or.th/th/market/market-highlight",
         }
