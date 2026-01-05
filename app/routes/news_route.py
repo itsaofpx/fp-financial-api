@@ -16,7 +16,7 @@ news_service = NewsService()
 gemini_prompt_service = GeminiPromptService()
 
 # GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyCQtwJMf6N7ZWPpzQ-hhN1krk2EnZmJDz4")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyDQMvla98RH0xfwAguSbOgHLyQJVhvjBrQ")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyBDJCcDsxXUe4-DEisFdlBdECN7rjV6Sas")
 genai.configure(api_key=GOOGLE_API_KEY)
 
 
@@ -93,6 +93,24 @@ def calculate_read_time(content):
     return rounded_time
 
 
+def translate_to_thai(model, text):
+    """Translate text to Thai using Gemini; fallback to original on failure."""
+    if not text:
+        return text
+    if not model:
+        return text
+    try:
+        prompt = (
+            "แปลข้อความต่อไปนี้เป็นภาษาไทยแบบกระชับ ชัดเจน และไม่ขยายความเกินจริง:\n"
+            f"{text}"
+        )
+        response = model.generate_content(prompt)
+        return response.text.strip() if response and response.text else text
+    except Exception as translate_error:
+        logger.warning(f"Translation failed, using original text: {translate_error}")
+        return text
+
+
 @news_bp.route("/", methods=["GET"])
 def get_all_news():
     page = request.args.get("page", 1, type=int)
@@ -155,6 +173,8 @@ def fetch_external_news():
             ), 400
 
         articles = response.json().get("articles", [])
+        translator_model = initialize_gemini_model()
+
         saved_articles = []
         unique_articles = set()
 
@@ -170,19 +190,26 @@ def fetch_external_news():
 
             content = article.get("content") or article.get("description") or ""
 
+            title_en = article.get("title")
+            description_en = article.get("description")
+
+            translated_title = translate_to_thai(translator_model, title_en)
+            translated_description = translate_to_thai(translator_model, description_en)
+            translated_content = translate_to_thai(translator_model, content)
+
             if not any(
-                keyword.lower() in content.lower()
-                or keyword.lower() in article.get("title", "").lower()
+                keyword.lower() in translated_content.lower()
+                or keyword.lower() in translated_title.lower()
                 for keyword in keywords
             ):
                 continue
 
-            estimated_read_time = calculate_read_time(content)
+            estimated_read_time = calculate_read_time(translated_content)
 
             article_data = {
                 "id": str(uuid.uuid4()),
-                "title": article.get("title"),
-                "description": article.get("description"),
+                "title": translated_title,
+                "description": translated_description,
                 "url": article.get("url"),
                 "source": source_name,
                 "publishedAt": datetime.strptime(
@@ -190,10 +217,9 @@ def fetch_external_news():
                 )
                 if article.get("publishedAt")
                 else None,
-                "scrapedContent": content,
+                "scrapedContent": translated_content,
                 "estimatedReadTime": estimated_read_time,
             }
-
             result = news_service.create_news(article_data)
             if result:
                 saved_articles.append(result)
