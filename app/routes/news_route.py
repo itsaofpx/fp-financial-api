@@ -15,6 +15,59 @@ news_bp = Blueprint("news", __name__)
 news_service = NewsService()
 gemini_prompt_service = GeminiPromptService()
 
+TOOL_CARDS = [
+        {
+            "order": 1,
+            "title": "คำนวณค่าเฉลี่ยหุ้น",
+            "description": "คำนวณราคาเฉลี่ยของหุ้นเพื่อวางแผนการลงทุน",
+        },
+        {
+            "order": 2,
+            "title": "แบ่งเงินลงทุนกับเงินสดเก็บออม",
+            "description": "จัดสรรเงินระหว่างการลงทุนและการออมอย่างสมดุล",
+        },
+        {
+            "order": 3,
+            "title": "แนวรับเบื้องต้น",
+            "description": "วิเคราะห์แนวรับและแนวต้านของราคาหุ้น",
+        },
+        {
+            "order": 4,
+            "title": "คำนวณการขายต้นทุนแบบ FIFO",
+            "description": "คำนวณกำไรขาดทุนด้วยวิธี First In First Out",
+        },
+        {
+            "order": 5,
+            "title": "คำนวณกำไรเป้าหมาย",
+            "description": "กำหนดเป้าหมายกำไรและคำนวณจุดขาย",
+        },
+        {
+            "order": 6,
+            "title": "คำนวณดอกเบี้ยทบต้น",
+            "description": "คำนวณการเติบโตของเงินด้วยดอกเบี้ยทบต้น",
+        },
+        {
+            "order": 7,
+            "title": "คำนวณเป้าหมายเงินปันผล",
+            "description": "คำนวณจำนวนหุ้นที่ต้องซื้อเพื่อให้ได้เงินปันผลตามเป้าหมาย",
+        },
+        {
+            "order": 8,
+            "title": "คำนวณภาษีการลงทุน",
+            "description": "คำนวณภาษีจากกำไรการลงทุนและการซื้อขาย",
+        },
+        {
+            "order": 9,
+            "title": "คำนวณ Stop Loss & Take Profit",
+            "description": "กำหนดจุดตัดขาดทุนและเก็บกำไรอย่างมีระบบ",
+        },
+        {
+            "order": 10,
+            "title": "คำนวณ Emergency Fund",
+            "description": "คำนวณเงินสำรองฉุกเฉินที่เหมาะสมกับรายได้",
+        },
+]
+
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=GOOGLE_API_KEY)
 
@@ -83,6 +136,94 @@ def translate_to_thai(model, text):
     except Exception as translate_error:
         logger.warning(f"Translation failed, using original text: {translate_error}")
         return text
+
+
+def _fallback_tool_recommendation(summary_text):
+    text = (summary_text or "").lower()
+
+    score_map = {i: 0 for i in range(1, 11)}
+
+    keyword_rules = {
+        1: ["หุ้น", "ทยอยซื้อ", "ต้นทุนเฉลี่ย", "dca", "volatility"],
+        2: ["จัดพอร์ต", "allocation", "สัดส่วน", "cash", "สภาพคล่อง"],
+        3: ["แนวรับ", "แนวต้าน", "เทคนิค", "breakout", "support"],
+        4: ["ขาย", "take profit", "realized", "fifo", "ล็อต"],
+        5: ["เป้าหมาย", "target", "จุดขาย", "upside"],
+        6: ["ดอกเบี้ย", "compound", "ระยะยาว", "ทบต้น"],
+        7: ["ปันผล", "dividend", "yield"],
+        8: ["ภาษี", "tax", "withholding", "capital gain"],
+        9: ["ความเสี่ยง", "risk", "stop loss", "take profit", "ผันผวน"],
+        10: ["ฉุกเฉิน", "emergency", "สำรอง", "เงินสด", "recession"],
+    }
+
+    for tool_no, keywords in keyword_rules.items():
+        for kw in keywords:
+            if kw in text:
+                score_map[tool_no] += 1
+
+    ranked = sorted(score_map.items(), key=lambda x: (-x[1], x[0]))
+    top = [tool_no for tool_no, score in ranked if score > 0][:3]
+
+    if len(top) < 3:
+        defaults = [2, 9, 1]
+        for item in defaults:
+            if item not in top:
+                top.append(item)
+            if len(top) == 3:
+                break
+
+    return top
+
+
+def recommend_tools_from_summary(summary_text):
+    model = initialize_gemini_model()
+
+    if not model:
+        return _fallback_tool_recommendation(summary_text)
+
+    tools_text = "\n".join(
+        [f"{tool['order']}. {tool['title']} - {tool['description']}" for tool in TOOL_CARDS]
+    )
+
+    prompt = f"""
+วิเคราะห์บทสรุปข่าวการเงินด้านล่าง แล้วเลือก "เครื่องมือที่เกี่ยวข้องที่สุด 3 อันดับแรก" จากรายการที่กำหนด
+
+รายการเครื่องมือ:
+{tools_text}
+
+บทสรุปข่าว:
+{summary_text}
+
+กติกาการตอบ:
+1) ตอบเป็นตัวเลขล้วน 3 ตัวตามลำดับความเกี่ยวข้องมาก -> น้อย
+2) รูปแบบคำตอบต้องเป็น: 1,2,3
+3) ห้ามมีข้อความอื่นประกอบ
+"""
+
+    try:
+        response = model.generate_content(prompt)
+        raw_text = response.text.strip() if response and response.text else ""
+        numbers = [int(x) for x in re.findall(r"\b(10|[1-9])\b", raw_text)]
+
+        unique_numbers = []
+        for num in numbers:
+            if 1 <= num <= 10 and num not in unique_numbers:
+                unique_numbers.append(num)
+            if len(unique_numbers) == 3:
+                break
+
+        if len(unique_numbers) < 3:
+            fallback = _fallback_tool_recommendation(summary_text)
+            for num in fallback:
+                if num not in unique_numbers:
+                    unique_numbers.append(num)
+                if len(unique_numbers) == 3:
+                    break
+
+        return unique_numbers[:3]
+    except Exception as e:
+        logger.warning(f"Tool recommendation fallback because of AI error: {e}")
+        return _fallback_tool_recommendation(summary_text)
 
 
 @news_bp.route("/", methods=["GET"])
@@ -296,6 +437,27 @@ def generate_daily_top_news():
         logger.error(f"Critical error in /ai endpoint: {str(e)}", exc_info=True)
         return jsonify({"error": "เกิดข้อผิดพลาดภายในระบบ"}), 500
 
+
+@news_bp.route("/tools/recommend", methods=["GET"])
+def recommend_tools():
+    try:
+        summary_text = request.args.get("summary") or request.args.get("content")
+
+        if not summary_text:
+            latest_prompt = gemini_prompt_service.get_latest_prompt()
+            if latest_prompt and latest_prompt.get("content"):
+                summary_text = latest_prompt.get("content")
+
+        if not summary_text:
+            return jsonify({"error": "ไม่พบบทสรุปข่าวสำหรับวิเคราะห์"}), 400
+
+        recommendations = recommend_tools_from_summary(summary_text)
+        return jsonify({"tools": recommendations}), 200
+
+    except Exception as e:
+        logger.error(f"Failed to recommend tools: {str(e)}", exc_info=True)
+        return jsonify({"error": "ไม่สามารถแนะนำเครื่องมือได้"}), 500
+
 def generate_ai_news_summary(articles):
     try:
         model = initialize_gemini_model()
@@ -352,6 +514,7 @@ def generate_ai_news_summary(articles):
 
         ข้อกำหนดพิเศษ:
         - ความยาว 20-30 บรรทัด
+        - ในแต่ละหัวข้อย่อยสรุปให้กระชับในย่อหน้าเดียวห้ามมีหลายย่อหน้า
         - เน้นการเว้นวรรคและย่อหน้าที่อ่านง่ายบนมือถือ
         - หากมีข่าวเกี่ยวกับ Warren Buffett หรือการเปลี่ยนผ่านผู้นำ ให้เน้นวิเคราะห์เรื่อง "ความเชื่อมั่นเชิงโครงสร้าง" (Structural Confidence)
         """
