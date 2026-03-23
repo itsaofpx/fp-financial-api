@@ -120,24 +120,6 @@ def calculate_read_time(content):
     return rounded_time
 
 
-def translate_to_thai(model, text):
-    """Translate text to Thai using Gemini; fallback to original on failure."""
-    if not text:
-        return text
-    if not model:
-        return text
-    try:
-        prompt = (
-            "แปลข้อความต่อไปนี้เป็นภาษาไทยแบบกระชับ ชัดเจน และไม่ขยายความเกินจริง:\n"
-            f"{text}"
-        )
-        response = model.generate_content(prompt)
-        return response.text.strip() if response and response.text else text
-    except Exception as translate_error:
-        logger.warning(f"Translation failed, using original text: {translate_error}")
-        return text
-
-
 def _fallback_tool_recommendation(summary_text):
     text = (summary_text or "").lower()
 
@@ -308,23 +290,13 @@ def fetch_external_news():
             title_en = article.get("title")
             description_en = article.get("description")
 
-            translated_title = translate_to_thai(translator_model, title_en)
-            translated_description = translate_to_thai(translator_model, description_en)
-            translated_content = translate_to_thai(translator_model, content)
 
-            if not any(
-                keyword.lower() in translated_content.lower()
-                or keyword.lower() in translated_title.lower()
-                for keyword in keywords
-            ):
-                continue
-
-            estimated_read_time = calculate_read_time(translated_content)
+            estimated_read_time = calculate_read_time(content)
 
             article_data = {
                 "id": str(uuid.uuid4()),
-                "title": translated_title,
-                "description": translated_description,
+                "title": title_en,
+                "description": description_en,
                 "url": article.get("url"),
                 "source": source_name,
                 "publishedAt": datetime.strptime(
@@ -332,7 +304,7 @@ def fetch_external_news():
                 )
                 if article.get("publishedAt")
                 else None,
-                "scrapedContent": translated_content,
+                "scrapedContent": content,
                 "estimatedReadTime": estimated_read_time,
             }
             result = news_service.create_news(article_data)
@@ -492,31 +464,23 @@ def generate_ai_news_summary(articles):
         บริบทข่าวสารล่าสุดที่รวบรวมมา:
         {articles_context}
 
-        คำแนะนำในการเขียน (Strict Instructions):
-        1. **บรรทัดแรก** ต้องขึ้นต้นด้วย: "บทวิเคราะห์ตลาดการเงินและการลงทุนประจำวัน: {formatted_date}"
-        2. **ห้ามใช้ปี พ.ศ. อื่น** นอกจาก {now.year + 543} ในการเกริ่นนำ หากข่าวระบุปีเก่า ให้วิเคราะห์ว่าเป็นผลกระทบต่อเนื่องมาจนถึงปัจจุบัน
-        3. ใช้ภาษาไทยระดับทางการที่อ่านง่าย มีความน่าเชื่อถือ และวิเคราะห์ลึกถึง "สาเหตุและผลกระทบ" (Impact Analysis)
-        4. หลีกเลี่ยงการสรุปข่าวทีละข่าว แต่ให้ "ร้อยเรียง" ข่าวทั้งหมดเข้าด้วยกันเป็นภาพรวมเดียว
+        คำแนะนำและข้อกำหนด (Strict Instructions):
+        1. ผลลัพธ์ต้องคืนค่าเป็น JSON ที่มีโครงสร้าง Key ดังนี้: "title", "header", "section_1", "section_2", "section_3", "section_4"
+        2. ใน Key "header" ต้องใช้ข้อความ: "บทวิเคราะห์ตลาดการเงินและการลงทุนประจำวัน: {formatted_date}"
+        3. ห้ามใช้ปี พ.ศ. อื่น นอกจาก {now.year + 543} ในการวิเคราะห์ หากข่าวระบุปีเก่า ให้วิเคราะห์ว่าเป็นผลกระทบต่อเนื่องมาจนถึงปัจจุบัน
+        4. ใช้ภาษาไทยระดับทางการที่อ่านง่าย มีความน่าเชื่อถือ และวิเคราะห์ลึกถึง "สาเหตุและผลกระทบ" (Impact Analysis)
+        5. ในแต่ละ Section (1-4) ให้เขียนสรุปเนื้อหาให้กระชับ "ภายในย่อหน้าเดียว" (Single Paragraph) ห้ามขึ้นบรรทัดใหม่ภายใน Value นั้นๆ
+        6. หากมีข่าวเกี่ยวกับ Warren Buffett หรือการเปลี่ยนผ่านผู้นำ ให้เน้นวิเคราะห์เรื่อง "ความเชื่อมั่นเชิงโครงสร้าง" (Structural Confidence)
 
-        โครงสร้างบทวิเคราะห์ (ห้ามเปลี่ยนหัวข้อ):
-        ---
-        บทวิเคราะห์ตลาดการเงิน: แนวโน้มและโอกาสการลงทุนประจำวัน
-        บทวิเคราะห์ตลาดการเงินและการลงทุนประจำวัน: {formatted_date}
-
-        [1. สรุปภาพรวมสภาวะตลาดการเงิน]: (วิเคราะห์ความเคลื่อนไหวของตลาดโลกในรอบ 24 ชั่วโมงที่ผ่านมา)
-        
-        [2. ปัจจัยสำคัญที่ขับเคลื่อนตลาด]: (เจาะลึก 2-3 ประเด็นที่ส่งผลกระทบต่อจิตวิทยานักลงทุนในขณะนี้)
-        
-        [3. กลยุทธ์การบริหารพอร์ตการลงทุน]: (คำแนะนำในการปรับสัดส่วนสินทรัพย์หรือการรับมือความเสี่ยง)
-        
-        [4. มุมมองและคาดการณ์ระยะสั้น]: (การพยากรณ์ทิศทางตลาดในช่วงสัปดาห์นี้)
-        ---
-
-        ข้อกำหนดพิเศษ:
-        - ความยาว 20-30 บรรทัด
-        - ในแต่ละหัวข้อย่อยสรุปให้กระชับในย่อหน้าเดียวห้ามมีหลายย่อหน้า
-        - เน้นการเว้นวรรคและย่อหน้าที่อ่านง่ายบนมือถือ
-        - หากมีข่าวเกี่ยวกับ Warren Buffett หรือการเปลี่ยนผ่านผู้นำ ให้เน้นวิเคราะห์เรื่อง "ความเชื่อมั่นเชิงโครงสร้าง" (Structural Confidence)
+        โครงสร้าง JSON ที่ต้องส่งกลับมา:
+        {{
+            "title": "บทวิเคราะห์ตลาดการเงิน: แนวโน้มและโอกาสการลงทุนประจำวัน",
+            "header": "บทวิเคราะห์ตลาดการเงินและการลงทุนประจำวัน: {formatted_date}",
+            "section_1": "(สรุปภาพรวมสภาวะตลาดการเงินในรอบ 24 ชั่วโมงที่ผ่านมา)",
+            "section_2": "(เจาะลึก 2-3 ประเด็นสำคัญที่ขับเคลื่อนตลาดและจิตวิทยานักลงทุน)",
+            "section_3": "(คำแนะนำการบริหารพอร์ตการลงทุนและการรับมือความเสี่ยง)",
+            "section_4": "(การพยากรณ์ทิศทางตลาดในช่วงสัปดาห์นี้)"
+        }}    
         """
 
         response = model.generate_content(prompt)
